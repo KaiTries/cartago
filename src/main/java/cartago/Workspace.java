@@ -1952,13 +1952,12 @@ public class Workspace {
 					env.serveOperation(item);
 					//nfailures = 0;
 				} catch (Exception ex){
+					if (ex instanceof InterruptedException){
+						break;
+					} else {
 					ex.printStackTrace();
 					env.log("[ENV-CONTROLLER] uncaught operation exception: "+ex);
-					/*
-					 nfailures++;
-					if (nfailures>10){
-						break;
-					}*/
+					}
 				}
 			}
 
