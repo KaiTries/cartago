@@ -1952,7 +1952,7 @@ public class Workspace {
 					env.serveOperation(item);
 					//nfailures = 0;
 				} catch (Exception ex){
-					if (ex instanceof InterruptedException){
+					if (ex instanceof InterruptedException && isStopped()){
 						break;
 					} else {
 					ex.printStackTrace();
