@@ -27,11 +27,7 @@ import cartago.infrastructure.*;
 import cartago.security.*;
 import io.vertx.core.Vertx;
 import io.vertx.core.buffer.Buffer;
-import io.vertx.core.http.HttpClient;
-import io.vertx.core.http.HttpClientOptions;
-import io.vertx.core.http.HttpClientRequest;
-import io.vertx.core.http.ServerWebSocket;
-import io.vertx.core.http.WebSocket;
+import io.vertx.core.http.*;
 import io.vertx.core.json.JsonObject;
 import io.vertx.ext.web.client.HttpResponse;
 import io.vertx.ext.web.client.WebClient;
@@ -60,390 +56,308 @@ public class CartagoInfrastructureLayer implements ICartagoInfrastructureLayer {
 	}
 
 	public ICartagoContext joinRemoteWorkspace(String envName, String address, String wspFullNameRemote, AgentCredential cred, ICartagoCallback eventListener, String wspNameLocal) throws CartagoInfrastructureLayerException, CartagoException {
-		
 		try {
-			
 			String host = getHost(address);
 			int port = getPort(address);
 			if (port == -1) {
-				port = DEFAULT_PORT;
+				port = 20100;
 			}
 
-			HttpClientOptions options = new HttpClientOptions().setDefaultHost(host).setDefaultPort(port);
-			HttpClient client = vertx.createHttpClient(options);
-			
-			AgentBodyProxy proxy = new AgentBodyProxy(vertx, port);
-			
+			WebSocketClient client = this.vertx.createWebSocketClient();
+			AgentBodyProxy proxy = new AgentBodyProxy(this.vertx, port);
 			Semaphore ev = new Semaphore(0);
-			error = false;
-			
-			client.websocket("/cartago/api/join", (WebSocket ws) -> {
-				  
-				  JsonObject params = new JsonObject();
-				  params.put("wspFullName", wspFullNameRemote);
-				  JsonObject ac = new JsonObject();
-				  ac.put("userName", cred.getId());
-				  ac.put("roleName", cred.getRoleName());				  
-				  params.put("agent-cred", ac);
-				  
-				  ws.handler((Buffer b) -> {
-					  try {
-						JsonObject msg = b.toJsonObject();  
-						String wspUUID = msg.getString("wspUUID");
-						WorkspaceId wspId = new WorkspaceId(wspNameLocal, UUID.fromString(wspUUID));						
-						proxy.init(address, ws, wspId, eventListener);
-					  } catch (Exception ex) { 
-						ex.printStackTrace();  
-					  } finally {
-					  	ev.release();
-					  }
-				  });
-				   
-				  ws.writeTextMessage(params.encode());
-			}, err -> {
-				  System.out.println("Error!");
-				  error = true;
-				  ev.release();
-			
-			});
+			this.error = false;
+			client.connect(port, host, "/cartago/api/join", (r) -> {
+				if (r.succeeded()) {
+					WebSocket ws = (WebSocket)r.result();
+					JsonObject params = new JsonObject();
+					params.put("wspFullName", wspFullNameRemote);
+					JsonObject ac = new JsonObject();
+					ac.put("userName", cred.getId());
+					ac.put("roleName", cred.getRoleName());
+					params.put("agent-cred", ac);
+					ws.handler((b) -> {
+						try {
+							JsonObject msg = b.toJsonObject();
+							String wspUUID = msg.getString("wspUUID");
+							WorkspaceId wspId = new WorkspaceId(wspNameLocal, UUID.fromString(wspUUID));
+							proxy.init(address, ws, wspId, eventListener);
+						} catch (Exception var13) {
+							Exception ex = var13;
+							ex.printStackTrace();
+						} finally {
+							ev.release();
+						}
 
+					});
+					ws.writeTextMessage(params.encode());
+				} else {
+					System.out.println("Error!");
+					this.error = true;
+					ev.release();
+				}
+
+			});
 			ev.acquire();
-			if (!error) {
+			if (!this.error) {
 				return proxy;
 			} else {
 				throw new CartagoInfrastructureLayerException();
 			}
-			
-		} catch (Exception ex){
+		} catch (Exception var12) {
+			Exception ex = var12;
 			ex.printStackTrace();
 			throw new CartagoInfrastructureLayerException();
 		}
-		
-		// throw new RuntimeException("not implemented");
-
 	}
-	
-	/**
-	 * remote path: <host>{:<port>}/<masName>/<wspPath>
-	 */
+
 	public WorkspaceDescriptor resolveRemoteWSP(String remotePath) throws WorkspaceNotFoundException {
 		int index1 = remotePath.indexOf("//");
 		String address = null;
 		String fullName = null;
 		int index2;
 		if (index1 == -1) {
-			index2 = remotePath.indexOf('/');
+			index2 = remotePath.indexOf(47);
 			address = remotePath.substring(0, index2);
 			fullName = remotePath.substring(index2 + 1);
 		} else {
 			String withoutPref = remotePath.substring(index1 + 2);
-			String pref = remotePath.substring(0, index1 + 2);
-			index2 = withoutPref.indexOf('/');
-			address = withoutPref.substring(0,index2);
+			remotePath.substring(0, index1 + 2);
+			index2 = withoutPref.indexOf(47);
+			address = withoutPref.substring(0, index2);
 			fullName = withoutPref.substring(index2 + 1);
 		}
-		int index3 = fullName.indexOf('/');
+
+		int index3 = fullName.indexOf(47);
 		String envName = fullName.substring(0, index3);
 		String wspPath = fullName.substring(index3);
 		return this.resolveRemoteWSP(wspPath, address, envName);
-	}	
-	
+	}
+
 	public WorkspaceDescriptor createRemoteWorkspace(String fullWspName, String address, String envName) throws CartagoException {
 		try {
-			
 			String addr = address;
 			if (addr.startsWith("http://")) {
 				addr = addr.substring(7);
 			}
-			
+
 			String host = getHost(addr);
 			int port = getPort(addr);
 			if (port == -1) {
-				port = DEFAULT_PORT;
+				port = 20100;
 			}
 
 			Semaphore ev = new Semaphore(0);
-			
-			Holder<WorkspaceDescriptor> result = new Holder<WorkspaceDescriptor>();
-			
-			WebClient client = WebClient.create(vertx);
-			// String uri = "/" + envName + fullPath;
-			String uri = "/cartago/api/envs"; 
-			
+			Holder<WorkspaceDescriptor> result = new Holder();
+			WebClient client = WebClient.create(this.vertx);
+			String uri = "/cartago/api/envs";
 			int index = fullWspName.lastIndexOf("/");
 			String rootWspName = fullWspName.substring(index + 1);
-			
 			JsonObject msg = new JsonObject();
 			msg.put("wspRootName", rootWspName);
 			msg.put("envName", CartagoEnvironment.getInstance().getName());
 			msg.put("envPort", port);
-			
 			Buffer buffer = msg.toBuffer();
-
-			client
-			  .post(22000, host, uri)
-			  .sendBuffer(buffer, ar -> {
-			    try {
+			client.post(22000, host, uri).sendBuffer(buffer, (ar) -> {
+				try {
 					if (ar.succeeded()) {
-				      HttpResponse<Buffer> response = ar.result();
-				      // System.out.println("Received response with status code" + response.statusCode());
-				      JsonObject ws = response.bodyAsJsonObject();
-				      // GlobalWorkspaceInfo info = JsonUtil.toGlobalWorkspaceInfo(ws);
-				      // String envName = ws.getString("envName");
-				      String envId = ws.getString("envId");
-				      UUID uuid = UUID.fromString(envId);
-				      JsonObject id = ws.getJsonObject("wspId");
-				      WorkspaceId wid = JsonUtil.toWorkspaceId(id);
-				      WorkspaceDescriptor des = new WorkspaceDescriptor(envName, uuid, wid, fullWspName, address, "web");
-				      result.set(des);	
-				    } else {
-				      System.out.println("Something went wrong " + ar.cause().getMessage());
-				    }
-			    } catch (Exception ex) {
-			    	ex.printStackTrace();
-			    } finally {
-				    ev.release();
-			    }
-			  });
-			
+						HttpResponse<Buffer> response = (HttpResponse)ar.result();
+						JsonObject ws = response.bodyAsJsonObject();
+						String envId = ws.getString("envId");
+						UUID uuid = UUID.fromString(envId);
+						JsonObject id = ws.getJsonObject("wspId");
+						WorkspaceId wid = JsonUtil.toWorkspaceId(id);
+						WorkspaceDescriptor des = new WorkspaceDescriptor(envName, uuid, wid, fullWspName, address, "web");
+						result.set(des);
+					} else {
+						System.out.println("Something went wrong " + ar.cause().getMessage());
+					}
+				} catch (Exception var16) {
+					Exception ex = var16;
+					ex.printStackTrace();
+				} finally {
+					ev.release();
+				}
+
+			});
+
 			try {
 				ev.acquire();
-			} catch(Exception ex) {
+			} catch (Exception var16) {
+				Exception ex = var16;
 				ex.printStackTrace();
 			}
-			
+
 			if (result.isPresent()) {
-				return result.getValue();
+				return (WorkspaceDescriptor)result.getValue();
 			} else {
 				throw new WorkspaceNotFoundException();
 			}
-		} catch (Exception ex) {
+		} catch (Exception var17) {
 			throw new WorkspaceNotFoundException();
-		}		
+		}
 	}
 
 	public WorkspaceDescriptor resolveRemoteWSP(String fullPath, String address, String masName) throws WorkspaceNotFoundException {
 		try {
-			
 			String host = getHost(address);
 			int port = getPort(address);
 			if (port == -1) {
-				port = DEFAULT_PORT;
+				port = 20100;
 			}
 
 			Semaphore ev = new Semaphore(0);
-			
-			Holder<WorkspaceDescriptor> result = new Holder<WorkspaceDescriptor>();
-			
-			WebClient client = WebClient.create(vertx);
-			// String uri = "/" + envName + fullPath;
-			String uri = "/cartago/api/" + masName; 
-			
-			client
-			  .get(port, host, uri)
-			  .addQueryParam("wsp", fullPath)
-			  .send(ar -> {
-			    try {
+			Holder<WorkspaceDescriptor> result = new Holder();
+			WebClient client = WebClient.create(this.vertx);
+			String uri = "/cartago/api/" + masName;
+			client.get(port, host, uri).addQueryParam("wsp", fullPath).send((ar) -> {
+				try {
 					if (ar.succeeded()) {
-				      HttpResponse<Buffer> response = ar.result();
-				      // System.out.println("Received response with status code" + response.statusCode());
-				      JsonObject ws = response.bodyAsJsonObject();
-				      // GlobalWorkspaceInfo info = JsonUtil.toGlobalWorkspaceInfo(ws);
-				      String envName = ws.getString("envName");
-				      String envId = ws.getString("envId");
-				      UUID uuid = UUID.fromString(envId);
-				      JsonObject id = ws.getJsonObject("id");
-				      WorkspaceDescriptor des = null;
-				      if (id != null) {
-				    	  /* local for the remote => remote for this node */
-				    	  WorkspaceId wid = JsonUtil.toWorkspaceId(id);
-				    	  des = new WorkspaceDescriptor(envName, uuid, wid, fullPath, address, "web");
-				      } else {
-				    	  String remotePath = ws.getString("remotePath");
-				    	  String addr = ws.getString("address");
-				    	  String protocol = ws.getString("protocol");
-				    	  des = new WorkspaceDescriptor(envName, uuid, null, remotePath, addr, protocol);
-				      }
-			    	  result.set(des);	
-				    } else {
-				      System.out.println("Something went wrong " + ar.cause().getMessage());
-				    }
-			    } catch (Exception ex) {
-			    	ex.printStackTrace();
-			    } finally {
-				    ev.release();
-			    }
-			  });
-			
+						HttpResponse<Buffer> response = (HttpResponse)ar.result();
+						JsonObject ws = response.bodyAsJsonObject();
+						String envName = ws.getString("envName");
+						String envId = ws.getString("envId");
+						UUID uuid = UUID.fromString(envId);
+						JsonObject id = ws.getJsonObject("id");
+						WorkspaceDescriptor des = null;
+						if (id != null) {
+							WorkspaceId wid = JsonUtil.toWorkspaceId(id);
+							des = new WorkspaceDescriptor(envName, uuid, wid, fullPath, address, "web");
+						} else {
+							String remotePath = ws.getString("remotePath");
+							String addr = ws.getString("address");
+							String protocol = ws.getString("protocol");
+							des = new WorkspaceDescriptor(envName, uuid, (WorkspaceId)null, remotePath, addr, protocol);
+						}
+
+						result.set(des);
+					} else {
+						System.out.println("Something went wrong " + ar.cause().getMessage());
+					}
+				} catch (Exception var18) {
+					Exception ex = var18;
+					ex.printStackTrace();
+				} finally {
+					ev.release();
+				}
+
+			});
+
 			try {
 				ev.acquire();
-			} catch(Exception ex) {
+			} catch (Exception var11) {
+				Exception ex = var11;
 				ex.printStackTrace();
 			}
-			
+
 			if (result.isPresent()) {
-				return result.getValue();
+				return (WorkspaceDescriptor)result.getValue();
 			} else {
 				throw new WorkspaceNotFoundException();
 			}
-		} catch (Exception ex) {
+		} catch (Exception var12) {
 			throw new WorkspaceNotFoundException();
 		}
 	}
 
-	
 	public void spawnNode(String address, String masName, UUID envId, String rootWspName) {
 		try {
-			
 			String host = getHost(address);
 			int port = getPort(address);
 			if (port == -1) {
-				port = DEFAULT_PORT;
+				port = 20100;
 			}
-			
-			WebClient client = WebClient.create(vertx);
-			String uri = "/cartago/api/envs"; 
-			
+
+			WebClient client = WebClient.create(this.vertx);
+			String uri = "/cartago/api/envs";
 			JsonObject msg = new JsonObject();
 			msg.put("envName", masName);
 			msg.put("envPort", port);
 			msg.put("wspRootName", rootWspName);
-			Buffer buffer = msg.toBuffer(); 
-				
+			Buffer buffer = msg.toBuffer();
 			Semaphore done = new Semaphore(0);
-			
-			client
-			  .post(DAEMON_PORT, host, uri)
-			  .sendBuffer(buffer, ar -> {
-			    try {
+			client.post(10000, host, uri).sendBuffer(buffer, (ar) -> {
+				try {
 					if (ar.succeeded()) {
-				      HttpResponse<Buffer> response = ar.result();
-				      System.out.println("Spawn succeeded: " + masName + " at " + address);
-				    } else {
-				      System.out.println("Something went wrong " + ar.cause().getMessage());
-				    }
-			    } catch (Exception ex) {
-			    	ex.printStackTrace();
-			    } finally {
-			    	done.release();
-			    }
-			  });
-			
-			  done.acquire();
-		} catch (Exception ex) {
-			ex.printStackTrace();
-		}
-	}
-	
-	
-	public OpId execRemoteInterArtifactOp(ICartagoCallback callback, long callbackId,
-			AgentId userId, ArtifactId srcId, ArtifactId targetId, String address, Op op,
-			long timeout, IAlignmentTest test)
-			throws CartagoInfrastructureLayerException, CartagoException {
-		/* try {
-			CartagoCallbackRemote srv = new CartagoCallbackRemote(callback);
-			CartagoCallbackProxy proxy = new CartagoCallbackProxy(srv);
-			String fullAddress = address;
-			if (getPort(address)==-1){
-				fullAddress = address+":"+DEFAULT_PORT;
-			}
-			ICartagoNodeRemote env = (ICartagoNodeRemote)Naming.lookup("rmi://"+fullAddress+"/cartago_node");
-			return env.execInterArtifactOp(proxy, callbackId, userId, srcId, targetId, op, timeout, test);
-		} catch (Exception ex){
-			ex.printStackTrace();
-			throw new CartagoException("Inter-artifact op failed: "+ex.getLocalizedMessage());
-		}*/
-		throw new RuntimeException("not implemented");
-	}
-
-
-
-
-	//
-	
-	public void registerLoggerToRemoteWsp(String wspName, String address, ICartagoLogger logger) throws CartagoException {
-		/*
-		try {
-			String fullAddress = address;
-			if (getPort(address)==-1){
-				fullAddress = address+":"+DEFAULT_PORT;
-			}
-			ICartagoNodeRemote env = (ICartagoNodeRemote)Naming.lookup("rmi://"+fullAddress+"/cartago_node");
-			CartagoLoggerRemote srv = new CartagoLoggerRemote(logger);
-			CartagoLoggerProxy proxy = new CartagoLoggerProxy(srv);
-			env.registerLogger(wspName, proxy);
-		} catch (RemoteException ex) {
-			ex.printStackTrace();
-			throw new CartagoInfrastructureLayerException();
-		} catch (NotBoundException ex) {
-			ex.printStackTrace();
-			throw new CartagoInfrastructureLayerException();
-		} catch (MalformedURLException ex){
-			ex.printStackTrace();
-			throw new CartagoInfrastructureLayerException();
-		}*/
-		throw new RuntimeException("not implemented");
-		
-	}
-	
-	//
-	
-	public void startService(String address) throws CartagoInfrastructureLayerException {
-		
-		if (service != null){
-			throw new CartagoInfrastructureLayerException();
-		}
-		try {
-			int port = DEFAULT_PORT;
-			service = new CartagoEnvironmentService();
-			if (address == null || address.equals("")){
-				address = InetAddress.getLocalHost().getHostAddress();
-			} else {
-				int port1 = getPort(address);
-				if (port1 != -1){
-					port = port1;
-					address = address.substring(0, address.indexOf(':'));
+						HttpResponse<Buffer> response = (HttpResponse)ar.result();
+						System.out.println("Spawn succeeded: " + masName + " at " + address);
+					} else {
+						System.out.println("Something went wrong " + ar.cause().getMessage());
+					}
+				} catch (Exception var8) {
+					Exception ex = var8;
+					ex.printStackTrace();
+				} finally {
+					done.release();
 				}
-			}
-			service.install(address, port);
-		} catch (Exception ex){
+
+			});
+			done.acquire();
+		} catch (Exception var12) {
+			Exception ex = var12;
 			ex.printStackTrace();
+		}
+
+	}
+
+	public OpId execRemoteInterArtifactOp(ICartagoCallback callback, long callbackId, AgentId userId, ArtifactId srcId, ArtifactId targetId, String address, Op op, long timeout, IAlignmentTest test) throws CartagoInfrastructureLayerException, CartagoException {
+		throw new RuntimeException("not implemented");
+	}
+
+	public void registerLoggerToRemoteWsp(String wspName, String address, ICartagoLogger logger) throws CartagoException {
+		throw new RuntimeException("not implemented");
+	}
+
+	public void startService(String address) throws CartagoInfrastructureLayerException {
+		if (this.service != null) {
 			throw new CartagoInfrastructureLayerException();
+		} else {
+			try {
+				int port = 20100;
+				this.service = new CartagoEnvironmentService();
+				if (address != null && !address.equals("")) {
+					int port1 = getPort(address);
+					if (port1 != -1) {
+						port = port1;
+						address = address.substring(0, address.indexOf(58));
+					}
+				} else {
+					address = InetAddress.getLocalHost().getHostAddress();
+				}
+
+				this.service.install(address, port);
+			} catch (Exception var4) {
+				Exception ex = var4;
+				ex.printStackTrace();
+				throw new CartagoInfrastructureLayerException();
+			}
 		}
 	}
 
 	public void shutdownService() throws CartagoException {
-		
-		if (service != null){
-			service.shutdownService();
-			service = null;
+		if (this.service != null) {
+			this.service.shutdownService();
+			this.service = null;
 		}
+
 	}
 
 	public boolean isServiceRunning() {
-		return service != null;
+		return this.service != null;
 	}
 
-	
-	private static int getPort(String address){
+	private static int getPort(String address) {
 		int index = address.indexOf(":");
-		if (index != -1){
-			String snum = address.substring(index+1);
+		if (index != -1) {
+			String snum = address.substring(index + 1);
 			return Integer.parseInt(snum);
 		} else {
 			return -1;
 		}
-		
-	}
-	
-	private static String getHost(String address){
-		int index = address.indexOf(":");
-		if (index != -1){
-			return address.substring(0,index);
-		} else {
-			return address;
-		}
-		
 	}
 
+	private static String getHost(String address) {
+		int index = address.indexOf(":");
+		return index != -1 ? address.substring(0, index) : address;
+	}
 }

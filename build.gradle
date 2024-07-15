@@ -9,6 +9,8 @@
 plugins {
   // id 'application'
   id 'org.openjfx.javafxplugin' version '0.0.8'
+  id 'com.github.johnrengelman.shadow' version '7.1.2'
+
 }
 
 apply plugin: 'java'
@@ -18,7 +20,7 @@ version '3.2-SNAPSHOT'
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(15)
+        languageVersion = JavaLanguageVersion.of(21)
     }
 }
 
@@ -29,7 +31,7 @@ sourceSets {
         srcDir 'src/main/java'
       }
 
-      java.outputDir = file('build/classes/main')
+      java.destinationDirectory = file('build/classes/main')
   }
 
   jaca {
@@ -38,7 +40,7 @@ sourceSets {
         srcDir 'src/jaca/java'
       }
 
-      java.outputDir = file('build/classes/jaca')
+      java.destinationDirectory = file('build/classes/jaca')
       compileClasspath = files ('build/classes/main','build/classes/jaca') + configurations.runtimeClasspath
   }
 }
@@ -52,11 +54,13 @@ dependencies {
     implementation group: 'net.openhft', name: 'compiler', version: '2.3.1'
 
 	// used in web infrastructure
-  	implementation "io.vertx:vertx-core:3.7.0"
-  	implementation "io.vertx:vertx-sync:3.7.0"
-  	implementation "io.vertx:vertx-unit:3.7.0"
-  	implementation "io.vertx:vertx-web:3.7.0"
-  	implementation "io.vertx:vertx-web-client:3.7.0"
+  	implementation "io.vertx:vertx-core:4.5.0"
+    implementation("io.vertx:vertx-sync:4.5.0") {
+        exclude group: 'co.paralleluniverse', module: 'quasar-core'
+    }
+  	implementation "io.vertx:vertx-unit:4.5.0"
+  	implementation "io.vertx:vertx-web:4.5.0"
+  	implementation "io.vertx:vertx-web-client:4.5.0"
 	implementation "com.fasterxml.jackson.core:jackson-databind:2.9.8"
 
 	implementation files('libs/lipermi-0.4.jar')
@@ -92,13 +96,15 @@ task generateRMIstubs(type:Exec, dependsOn: classes) {
 
 //task cartagoJar(type: Jar, dependsOn: [ classes, generateRMIstubs ]) {
 task cartagoJar(type: Jar, dependsOn: [ classes ]) {
-  baseName 'cartago'
+    archiveBaseName.set('cartago')
   from 'build/classes/main'
   include '**'
 }
 
+compileJacaJava.mustRunAfter compileJava
+
 task jacaJar(type: Jar, dependsOn: compileJacaJava) {
-  baseName 'jaca'
+    archiveBaseName.set('jaca')
   from 'build/classes/jaca'
   include '**'
 }
@@ -128,7 +134,7 @@ if (JavaVersion.current().isJava8Compatible()) {
 }
 
 
-task makeDist (dependsOn: ['build','jar']) {
+task makeDist (dependsOn: ['build','shadowJar']) {
      copy {
           from '.'
           into 'build/dist/cartago-'+version
@@ -177,16 +183,24 @@ task makeDist (dependsOn: ['build','jar']) {
           include('*.pdf')
       }
       cartagoJar {
-        destinationDir = new File('build/dist/cartago-'+version+'/lib')
+        destinationDirectory = new File('build/dist/cartago-'+version+'/lib')
       }
       jacaJar {
-        destinationDir = new File('build/dist/cartago-'+version+'/lib')
+        destinationDirectory = new File('build/dist/cartago-'+version+'/lib')
       }
+}
+
+shadowJar {
+    exclude('FIPA/**')
+    exclude('javafx/**')
+    exclude('javax/annotation/**')
+    exclude('net/openhft/compiler/**')
 }
 
 artifacts {
     archives cartagoJar
     archives jacaJar
+    archives shadowJar
 }
 
 /*
